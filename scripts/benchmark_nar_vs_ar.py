@@ -17,6 +17,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 from cws_fm.flow import (
+    flow_matching_loss,
     bhattacharyya_sphere_map,
     geodesic_sphere_path,
     geodesic_sphere_velocity,
@@ -116,9 +117,6 @@ def main():
 
     # Training data
     train_data = generate_structured_data(1000, args.seq_len, args.vocab_size, device)
-    train_one_hot = F.one_hot(train_data, num_classes=args.vocab_size).float()
-    u1_all = bhattacharyya_sphere_map(train_one_hot)
-    u0_uniform = torch.ones(args.vocab_size, device=device) / math.sqrt(args.vocab_size)
 
     # 2. Train both models
     print("\n[Phase 1] Training CWS-FM (Simplex Flow Matching) & AR Transformer...")
@@ -139,15 +137,7 @@ def main():
         ar_opt.step()
 
         # CWS-FM Forward step
-        u1_batch = u1_all[idx]
-        t = torch.rand(args.batch_size, 1, device=device)
-        tau = wavefront_phase(t, seq_len=args.seq_len, alpha=0.50).unsqueeze(-1)
-        u0_batch = u0_uniform.view(1, 1, -1).expand(args.batch_size, args.seq_len, -1)
-        u_tau = geodesic_sphere_path(u0_batch, u1_batch, tau)
-        v_target = geodesic_sphere_velocity(u0_batch, u1_batch, tau)
-
-        v_pred = nar_model(u_tau, t)
-        nar_loss = F.mse_loss(v_pred, v_target)
+        nar_loss = flow_matching_loss(nar_model, batch_tokens, args.vocab_size, alpha=0.50)
 
         nar_opt.zero_grad()
         nar_loss.backward()

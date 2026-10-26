@@ -46,6 +46,11 @@ def wavefront_phase(t: torch.Tensor, seq_len: int, alpha: float = 0.50) -> torch
     return torch.clamp(tau, 0.0, 1.0)
 
 
+def wavefront_delta_tau(t_curr: torch.Tensor, t_next: torch.Tensor, seq_len: int, alpha: float = 0.50) -> torch.Tensor:
+    """Exact per-position phase advance tau(t_next) - tau(t_curr); sums to 1 over [0, 1] for every position."""
+    return wavefront_phase(t_next, seq_len, alpha) - wavefront_phase(t_curr, seq_len, alpha)
+
+
 def geodesic_sphere_path(u0: torch.Tensor, u1: torch.Tensor, tau: torch.Tensor) -> torch.Tensor:
     """Computes the exact closed-form great-circle geodesic curve on S^{V-1}_+:
     gamma_tau(u0, u1) = (sin((1-tau)*theta) / sin(theta)) * u0 + (sin(tau*theta) / sin(theta)) * u1
@@ -104,6 +109,13 @@ def project_tangent_sphere(u: torch.Tensor, v: torch.Tensor) -> torch.Tensor:
     return v - inner * u
 
 
+def expected_log_map(u: torch.Tensor, p: torch.Tensor) -> torch.Tensor:
+    """sum_k p_k Log_u(e_k) on the unit sphere: the marginal geodesic velocity under posterior p over vertices."""
+    theta = torch.acos(u.clamp(0.0, 1.0 - 1e-7))
+    w = p * theta / torch.sin(theta).clamp_min(1e-7)  # Log_u(e_k) = theta_k/sin(theta_k) * (e_k - u_k u)
+    return w - (w * u).sum(-1, keepdim=True) * u
+
+
 def riemannian_exp_map(u: torch.Tensor, v: torch.Tensor, step_size: float) -> torch.Tensor:
     """Computes the Riemannian exponential map on the unit sphere along tangent vector v:
     exp_u(h * v) = cos(||h * v||) * u + sin(||h * v||) * (v / ||v||)
@@ -130,8 +142,9 @@ def sample_cws_fm(
     confidence_lock_threshold: float = 0.95,
     batch_size: int = 1,
     device: Optional[torch.device] = None,
+    heun: bool = False,
 ) -> Tuple[torch.Tensor, torch.Tensor]:
-    """Generates a full sequence in num_steps (4 or 8) parallel ODE steps via 2nd-order Riemannian Heun integration.
+    """Generates a full sequence in num_steps (4 or 8) parallel ODE steps via Riemannian Euler (optionally Heun) integration.
     Returns:
         tokens: (B, L) discrete token indices
         probs: (B, L, V) probability distributions on the simplex Delta^{V-1}
@@ -153,46 +166,53 @@ def sample_cws_fm(
             t_curr = torch.tensor([[step * h]], device=device)
             t_next = torch.tensor([[(step + 1) * h]], device=device)
 
-            tau_curr = wavefront_phase(t_curr, seq_len, alpha=alpha).unsqueeze(-1)  # (B, L, 1)
-            # Consistent time derivative chain rule: dtau/dt = 1/(1-alpha) in active wavefront band
-            band_curr = ((tau_curr > 0.0) & (tau_curr < 1.0)).float() / max(1e-5, 1.0 - alpha)
+            # Step each position by its exact phase advance; sampling the band indicator at grid points
+            # (trapezoid) integrated only 75% of each path
+            d_tau = wavefront_delta_tau(t_curr, t_next, seq_len, alpha=alpha).unsqueeze(-1)  # (B, L, 1)
 
-            # 1. Predictor step (Euler on sphere)
-            v_curr = model(u_curr, t_curr)
-            v_curr = project_tangent_sphere(u_curr, v_curr)
-
-            # Spherical exponential update
-            u_euler = riemannian_exp_map(u_curr, v_curr * band_curr, step_size=h)
+            # 1. Predictor step (Euler on sphere); the model predicts d(gamma)/d(tau)
+            v_curr = project_tangent_sphere(u_curr, model(u_curr, t_curr))
+            u_euler = riemannian_exp_map(u_curr, v_curr * d_tau, step_size=1.0)
             u_euler = torch.clamp(u_euler, min=0.0)
             u_euler = u_euler / torch.norm(u_euler, p=2, dim=-1, keepdim=True)
 
-            # 2. Corrector step (Heun average velocity)
-            tau_next = wavefront_phase(t_next, seq_len, alpha=alpha).unsqueeze(-1)
-            band_next = ((tau_next > 0.0) & (tau_next < 1.0)).float() / max(1e-5, 1.0 - alpha)
-
-            v_next = model(u_euler, t_next)
-            v_next = project_tangent_sphere(u_euler, v_next)
-            v_avg = 0.5 * (v_curr * band_curr + v_next * band_next)
-
-            u_next = riemannian_exp_map(u_curr, v_avg, step_size=h)
-            u_next = torch.clamp(u_next, min=0.0)
-            u_next = u_next / torch.norm(u_next, p=2, dim=-1, keepdim=True)
+            # 2. Optional Heun corrector. Off by default: with the posterior parametrization Euler lands on the
+            # predicted vertex when d_tau = 1 - tau, while v_next ~ 0 there halves the final step
+            if heun:
+                v_next = project_tangent_sphere(u_euler, model(u_euler, t_next))
+                u_next = riemannian_exp_map(u_curr, 0.5 * (v_curr + v_next) * d_tau, step_size=1.0)
+                u_next = torch.clamp(u_next, min=0.0)
+                u_next = u_next / torch.norm(u_next, p=2, dim=-1, keepdim=True)
+            else:
+                u_next = u_euler
 
             # 3. Adaptive confidence locking based on updated state at t_next
-            p_next = inverse_bhattacharyya_sphere_map(u_next)
-            max_p, argmax_p = torch.max(p_next, dim=-1)
+            p_continuous = inverse_bhattacharyya_sphere_map(u_next)
+            max_p, argmax_p = torch.max(p_continuous, dim=-1)
 
-            new_locks = (max_p >= confidence_lock_threshold) | (tau_next.squeeze(-1) >= 0.99)
+            new_locks = (max_p >= confidence_lock_threshold)
             locked_mask = locked_mask | new_locks
             locked_tokens = torch.where(new_locks, argmax_p, locked_tokens)
 
-            # Snap locked positions to pure one-hot vectors on the sphere
+            # Snap only confirmed high-confidence locked positions
             if locked_mask.any():
                 one_hot = F.one_hot(locked_tokens, num_classes=vocab_size).float()
                 u_next = torch.where(locked_mask.unsqueeze(-1), one_hot, u_next)
 
             u_curr = u_next
 
+    # Evaluate probabilities on the continuous spherical trajectory
     final_probs = inverse_bhattacharyya_sphere_map(u_curr)
     final_tokens = torch.argmax(final_probs, dim=-1)
     return final_tokens, final_probs
+
+
+def flow_matching_loss(model: torch.nn.Module, tokens: torch.Tensor, vocab_size: int, alpha: float = 0.50) -> torch.Tensor:
+    """Posterior flow-matching loss: sqrt(Dirichlet(1)) source, geodesic path at the wavefront phase, CE on the clean token."""
+    B, L = tokens.shape
+    u1 = torch.sqrt(F.one_hot(tokens, num_classes=vocab_size).float())
+    t = torch.rand(B, 1, device=tokens.device)
+    tau = wavefront_phase(t, L, alpha=alpha).unsqueeze(-1)
+    u0 = torch.sqrt(torch.distributions.Dirichlet(torch.ones(vocab_size, device=tokens.device)).sample((B, L)))
+    logits, _ = model.logits(geodesic_sphere_path(u0, u1, tau), t)
+    return F.cross_entropy(logits.reshape(-1, vocab_size), tokens.reshape(-1))

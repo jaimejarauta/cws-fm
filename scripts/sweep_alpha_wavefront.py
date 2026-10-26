@@ -15,6 +15,7 @@ import torch
 import torch.nn.functional as F
 
 from cws_fm.flow import (
+    flow_matching_loss,
     bhattacharyya_sphere_map,
     geodesic_sphere_path,
     geodesic_sphere_velocity,
@@ -49,9 +50,6 @@ def main():
     print("=" * 76)
 
     data = generate_causal_grammar_data(1000, args.seq_len, args.vocab_size, device)
-    one_hot = F.one_hot(data, num_classes=args.vocab_size).float()
-    u1_all = bhattacharyya_sphere_map(one_hot)
-    u0_uniform = torch.ones(args.vocab_size, device=device) / math.sqrt(args.vocab_size)
 
     alphas = [0.0, 0.25, 0.50, 0.75]
     sweep_results = {}
@@ -74,17 +72,7 @@ def main():
 
         for step in range(args.steps):
             idx = torch.randint(0, data.size(0), (16,))
-            u1_batch = u1_all[idx]
-
-            t = torch.rand(16, 1, device=device)
-            tau = wavefront_phase(t, seq_len=args.seq_len, alpha=alpha).unsqueeze(-1)
-            u0_batch = u0_uniform.view(1, 1, -1).expand(16, args.seq_len, -1)
-
-            u_tau = geodesic_sphere_path(u0_batch, u1_batch, tau)
-            v_target = geodesic_sphere_velocity(u0_batch, u1_batch, tau)
-
-            v_pred = model(u_tau, t)
-            loss = F.mse_loss(v_pred, v_target)
+            loss = flow_matching_loss(model, data[idx], args.vocab_size, alpha=alpha)
 
             opt.zero_grad()
             loss.backward()

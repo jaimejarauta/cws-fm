@@ -8,7 +8,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from cws_fm.flow import project_tangent_sphere, wavefront_phase
+from cws_fm.flow import expected_log_map, wavefront_phase
 
 
 class SinusoidalTimeEmbedding(nn.Module):
@@ -103,17 +103,11 @@ class SimplexVelocityField(nn.Module):
         self.final_norm = nn.LayerNorm(d_model)
         self.out_proj = nn.Linear(d_model, vocab_size, bias=False)
 
-    def forward(self, u_t: torch.Tensor, t: torch.Tensor) -> torch.Tensor:
-        """Args:
-            u_t: (B, L, V) point on the unit sphere S^{V-1}_+.
-            t: (B, 1) or scalar continuous time in [0, 1].
-        Returns:
-            v_t: (B, L, V) tangent velocity vector strictly satisfying <u_t, v_t> == 0.
-        """
+    def logits(self, u_t: torch.Tensor, t: torch.Tensor):
+        """Posterior logits over the clean token at each position, and the phase tau (B, L)."""
         B, L, V = u_t.shape
         device = u_t.device
 
-        # Continuous time embedding with positional wavefront phase
         if not isinstance(t, torch.Tensor):
             t = torch.tensor([[t]], device=device, dtype=u_t.dtype)
         elif t.dim() == 0:
@@ -124,27 +118,21 @@ class SimplexVelocityField(nn.Module):
             t = t.expand(B, -1)
 
         if t.dim() == 2 and t.size(1) == L:
-            tau = t  # (B, L)
-        elif self.alpha > 0.0:
-            from cws_fm.flow import wavefront_phase
-            tau = wavefront_phase(t, L, alpha=self.alpha)  # (B, L)
-        else:
             tau = t
+        elif self.alpha > 0.0:
+            tau = wavefront_phase(t, L, alpha=self.alpha)
+        else:
+            tau = t.expand(B, L)
 
-        t_emb = self.time_embed(tau)  # (B, L, D) or (B, 1, D)
-
-        # Token positions and sequence embedding
-        positions = torch.arange(L, device=device).unsqueeze(0)  # (1, L)
-        h = self.in_proj(u_t) + self.pos_emb(positions)  # (B, L, D)
-
-        # Deep bidirectional propagation
+        t_emb = self.time_embed(tau)
+        positions = torch.arange(L, device=device).unsqueeze(0)
+        h = self.in_proj(u_t) + self.pos_emb(positions)
         for block in self.blocks:
             h = block(h, t_emb)
+        return self.out_proj(self.final_norm(h)), tau
 
-        # Velocity output
-        raw_v = self.out_proj(self.final_norm(h))  # (B, L, V)
-
-        # Strict Riemannian orthogonal projection onto T_{u_t} S^{V-1}_+
-        tangent_v = project_tangent_sphere(u_t, raw_v)
-        return tangent_v
-
+    def forward(self, u_t: torch.Tensor, t: torch.Tensor) -> torch.Tensor:
+        """Marginal velocity d(gamma)/d(tau) = E_{k~p(.|u,tau)}[Log_u(e_k)] / (1 - tau); tangent to the sphere."""
+        logits, tau = self.logits(u_t, t)
+        remaining = (1.0 - tau).clamp_min(1e-3).unsqueeze(-1)
+        return expected_log_map(u_t, F.softmax(logits, dim=-1)) / remaining

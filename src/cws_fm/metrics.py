@@ -37,3 +37,15 @@ def compute_token_accuracy(pred_tokens: torch.Tensor, target_tokens: torch.Tenso
     matches = (pred_tokens == target_tokens).float()
     return float(matches.mean().item())
 
+
+
+def compute_palindrome_validity(tokens: torch.Tensor) -> float:
+    """Fraction of sequences whose second half is the reverse of the first (the training grammar)."""
+    half = tokens.size(1) // 2
+    ok = (tokens[:, :half] == torch.flip(tokens[:, -half:], dims=[1])).all(dim=1)
+    return float(ok.float().mean().item())
+
+
+def compute_distinct_ratio(tokens: torch.Tensor) -> float:
+    """Unique sequences / total sequences; 1/B means a deterministic sampler."""
+    return torch.unique(tokens, dim=0).size(0) / tokens.size(0)

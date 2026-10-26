@@ -71,3 +71,49 @@ def test_riemannian_exp_map():
     # Preserves unit norm
     assert torch.allclose(torch.norm(u_next, p=2, dim=-1), torch.ones(B, L), atol=1e-5)
 
+
+
+def test_untrained_sampler_can_fail_collapse_gate():
+    from cws_fm.model import SimplexVelocityField
+    from cws_fm.flow import sample_cws_fm
+    from cws_fm.metrics import compute_rounding_collapse_rate
+    torch.manual_seed(0)
+    _, probs = sample_cws_fm(SimplexVelocityField(32), seq_len=16, vocab_size=32, num_steps=8, batch_size=8)
+    # without forced locking, an untrained field must not look sharp
+    assert compute_rounding_collapse_rate(probs, threshold=0.85) > 0.5
+
+
+def test_wavefront_delta_tau_sums_to_one():
+    from cws_fm.flow import wavefront_delta_tau
+    for k in (4, 8, 7):
+        total = sum(wavefront_delta_tau(torch.tensor([[i / k]]), torch.tensor([[(i + 1) / k]]), 16, 0.5)
+                    for i in range(k))
+        assert torch.allclose(total, torch.ones_like(total), atol=1e-6)
+
+
+def test_expected_log_map_matches_geodesic_for_point_posterior():
+    from cws_fm.flow import expected_log_map, geodesic_sphere_velocity
+    torch.manual_seed(0)
+    V = 16
+    u = torch.rand(4, V)
+    u = u / u.norm(dim=-1, keepdim=True)
+    k = torch.tensor([3, 0, 7, 15])
+    e = torch.nn.functional.one_hot(k, V).float()
+    got = expected_log_map(u, e)
+    want = geodesic_sphere_velocity(u, e, torch.zeros(4, 1))  # d/dtau at tau=0 is the log map
+    assert torch.allclose(got, want, atol=1e-4)
+    assert (got * u).sum(-1).abs().max() < 1e-5
+
+
+def test_flow_matching_loss_is_finite_and_trains():
+    from cws_fm.model import SimplexVelocityField
+    from cws_fm.flow import flow_matching_loss
+    torch.manual_seed(0)
+    model = SimplexVelocityField(8, d_model=32, num_layers=1, num_heads=2, max_seq_len=4)
+    tokens = torch.tensor([[1, 2, 2, 1]]).repeat(8, 1)
+    opt = torch.optim.Adam(model.parameters(), 1e-2)
+    first = flow_matching_loss(model, tokens, 8, alpha=0.5)
+    for _ in range(50):
+        loss = flow_matching_loss(model, tokens, 8, alpha=0.5)
+        opt.zero_grad(); loss.backward(); opt.step()
+    assert torch.isfinite(first) and loss < first

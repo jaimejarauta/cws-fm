@@ -1,29 +1,38 @@
 {
   "architecture": "cws-fm",
   "description": "Causal Wavefront Simplex Flow Matching",
-  "date": "2026-10-26T07:55:52.617161+00:00",
+  "date": "2026-10-26T21:30:43.025994+00:00",
   "hardware": "mps",
-  "steps": 200,
-  "batch_size": 16,
+  "steps": 2000,
+  "batch_size": 64,
   "seq_len": 16,
   "vocab_size": 32,
-  "train_elapsed_sec": 4.949443817138672,
-  "final_loss": 0.017170168459415436,
+  "train_elapsed_sec": 22.021623134613037,
+  "final_loss": 0.42670297622680664,
   "eval_k4": {
+    "palindrome_validity": 0.734375,
+    "distinct_ratio": 1.0,
     "num_steps": 4,
-    "sample_time_ms": 706.9048881530762,
-    "tokens_per_sec": 22.63387942019053,
-    "rounding_collapse_rate": 0.0,
-    "average_entropy": 8.565615439160013e-10,
-    "orthogonality_error": 1.4996658137533814e-08
+    "sample_time_ms": 20.533084869384766,
+    "tokens_per_sec": 779.2302083091429,
+    "rounding_collapse_rate": 0.1396484375,
+    "average_entropy": 0.2149868607521057,
+    "orthogonality_error": 0.0001983642578125
   },
   "eval_k8": {
+    "palindrome_validity": 0.96875,
+    "distinct_ratio": 1.0,
     "num_steps": 8,
-    "sample_time_ms": 35.54511070251465,
-    "tokens_per_sec": 450.13223151582633,
-    "rounding_collapse_rate": 0.0,
-    "average_entropy": 8.565615439160013e-10,
-    "orthogonality_error": 1.4996658137533814e-08
+    "sample_time_ms": 21.575927734375,
+    "tokens_per_sec": 741.5671852899576,
+    "rounding_collapse_rate": 0.00390625,
+    "average_entropy": 0.004008086398243904,
+    "orthogonality_error": 0.0001373291015625
+  },
+  "seed": 0,
+  "untrained_control": {
+    "palindrome_validity": 0.0,
+    "rounding_collapse_rate": 1.0
   },
   "gate1_passed": true,
   "gate2_passed": true,
