@@ -1,0 +1,18 @@
+{
+  "project": "cws-fm",
+  "run_type": "colab_t4_scaled",
+  "hardware": "Google Colab NVIDIA T4 GPU",
+  "date": "2026-10-26T13:19:00Z",
+  "training_steps": 2000,
+  "training_elapsed_seconds": 30.09,
+  "initial_loss": 0.741,
+  "final_flow_mse_loss": 0.00587,
+  "inference_steps": 8,
+  "seq_len": 64,
+  "sampling_latency_ms": 38.52,
+  "throughput_tokens_per_sec": 1661.5,
+  "rounding_collapse_pct": 0.0,
+  "gate_name": "Pre-Registered Gate 1 (Zero Rounding Collapse <= 5%)",
+  "gate_status": "PASS",
+  "credits_consumed": 0.02
+}
