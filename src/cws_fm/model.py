@@ -23,13 +23,15 @@ class SinusoidalTimeEmbedding(nn.Module):
         )
 
     def forward(self, t: torch.Tensor) -> torch.Tensor:
-        """t: (B, 1) or (B,) tensor in [0, 1]."""
+        """t: (B, 1) or (B,) or (B, L) tensor in [0, 1]."""
         if t.dim() == 1:
+            t = t.unsqueeze(-1)
+        elif t.dim() == 2 and t.size(-1) != 1:
             t = t.unsqueeze(-1)
         half_dim = self.d_model // 2
         emb_scale = math.log(10000.0) / (half_dim - 1)
         freqs = torch.exp(torch.arange(half_dim, device=t.device, dtype=t.dtype) * -emb_scale)
-        args = t * freqs.unsqueeze(0)
+        args = t * freqs
         emb = torch.cat([torch.sin(args), torch.cos(args)], dim=-1)
         return self.mlp(emb)
 
@@ -51,8 +53,11 @@ class TransformerBlock(nn.Module):
         self.time_mod = nn.Linear(d_model, 4 * d_model)
 
     def forward(self, x: torch.Tensor, t_emb: torch.Tensor) -> torch.Tensor:
-        # t_emb: (B, D) -> modulate norm layers
-        mod = self.time_mod(t_emb).unsqueeze(1)  # (B, 1, 4*D)
+        # t_emb: (B, D) or (B, L, D) -> modulate norm layers
+        if t_emb.dim() == 2:
+            mod = self.time_mod(t_emb).unsqueeze(1)  # (B, 1, 4*D)
+        else:
+            mod = self.time_mod(t_emb)  # (B, L, 4*D)
         scale_attn, shift_attn, scale_ffn, shift_ffn = mod.chunk(4, dim=-1)
 
         # Attention sublayer
@@ -108,7 +113,7 @@ class SimplexVelocityField(nn.Module):
         B, L, V = u_t.shape
         device = u_t.device
 
-        # Continuous time embedding
+        # Continuous time embedding with positional wavefront phase
         if not isinstance(t, torch.Tensor):
             t = torch.tensor([[t]], device=device, dtype=u_t.dtype)
         elif t.dim() == 0:
@@ -116,9 +121,17 @@ class SimplexVelocityField(nn.Module):
         elif t.dim() == 1:
             t = t.unsqueeze(-1)
         if t.size(0) != B:
-            t = t.expand(B, 1)
+            t = t.expand(B, -1)
 
-        t_emb = self.time_embed(t)  # (B, D)
+        if t.dim() == 2 and t.size(1) == L:
+            tau = t  # (B, L)
+        elif self.alpha > 0.0:
+            from cws_fm.flow import wavefront_phase
+            tau = wavefront_phase(t, L, alpha=self.alpha)  # (B, L)
+        else:
+            tau = t
+
+        t_emb = self.time_embed(tau)  # (B, L, D) or (B, 1, D)
 
         # Token positions and sequence embedding
         positions = torch.arange(L, device=device).unsqueeze(0)  # (1, L)
