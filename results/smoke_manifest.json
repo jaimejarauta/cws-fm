@@ -1,0 +1,31 @@
+{
+  "architecture": "cws-fm",
+  "description": "Causal Wavefront Simplex Flow Matching",
+  "date": "2026-10-26T07:15:11.365615+00:00",
+  "hardware": "mps",
+  "steps": 100,
+  "batch_size": 16,
+  "seq_len": 16,
+  "vocab_size": 32,
+  "train_elapsed_sec": 3.2436881065368652,
+  "final_loss": 0.015127372927963734,
+  "eval_k4": {
+    "num_steps": 4,
+    "sample_time_ms": 677.7698993682861,
+    "tokens_per_sec": 23.606831780096407,
+    "rounding_collapse_rate": 0.0,
+    "average_entropy": 8.565615439160013e-10,
+    "orthogonality_error": 2.2065250959713012e-08
+  },
+  "eval_k8": {
+    "num_steps": 8,
+    "sample_time_ms": 33.418893814086914,
+    "tokens_per_sec": 478.7710834778018,
+    "rounding_collapse_rate": 0.0,
+    "average_entropy": 8.565615439160013e-10,
+    "orthogonality_error": 2.3365373635897413e-08
+  },
+  "gate1_passed": true,
+  "gate2_passed": true,
+  "gate_status": "PASS"
+}

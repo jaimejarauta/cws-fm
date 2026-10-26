@@ -1,0 +1,12 @@
+architecture: cws-fm
+vocab_size: 32
+seq_len: 16
+d_model: 64
+num_layers: 3
+num_heads: 4
+steps: 100
+batch_size: 16
+lr: 0.001
+alpha: 0.50
+num_ode_steps: [4, 8]
+confidence_lock_threshold: 0.90
