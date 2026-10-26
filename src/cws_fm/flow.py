@@ -128,6 +128,7 @@ def sample_cws_fm(
     num_steps: int = 8,
     alpha: float = 0.50,
     confidence_lock_threshold: float = 0.95,
+    batch_size: int = 1,
     device: Optional[torch.device] = None,
 ) -> Tuple[torch.Tensor, torch.Tensor]:
     """Generates a full sequence in num_steps (4 or 8) parallel ODE steps via 2nd-order Riemannian Heun integration.
@@ -139,11 +140,11 @@ def sample_cws_fm(
         device = next(model.parameters()).device
 
     model.eval()
-    batch_size = 1
     h = 1.0 / num_steps
 
-    # Initialize at uniform prior on S^{V-1}_+
-    u_curr = (torch.ones(batch_size, seq_len, vocab_size, device=device) / math.sqrt(vocab_size))
+    # Initialize with stochastic Dirichlet sample on S^{V-1}_+
+    p0 = torch.distributions.Dirichlet(torch.ones(vocab_size, device=device)).sample((batch_size, seq_len))
+    u_curr = torch.sqrt(p0)
     locked_mask = torch.zeros(batch_size, seq_len, dtype=torch.bool, device=device)
     locked_tokens = torch.zeros(batch_size, seq_len, dtype=torch.long, device=device)
 
@@ -153,27 +154,31 @@ def sample_cws_fm(
             t_next = torch.tensor([[(step + 1) * h]], device=device)
 
             tau_curr = wavefront_phase(t_curr, seq_len, alpha=alpha).unsqueeze(-1)  # (B, L, 1)
+            # Consistent time derivative chain rule: dtau/dt = 1/(1-alpha) in active wavefront band
+            band_curr = ((tau_curr > 0.0) & (tau_curr < 1.0)).float() / max(1e-5, 1.0 - alpha)
 
             # 1. Predictor step (Euler on sphere)
             v_curr = model(u_curr, t_curr)
             v_curr = project_tangent_sphere(u_curr, v_curr)
 
             # Spherical exponential update
-            u_euler = riemannian_exp_map(u_curr, v_curr, step_size=h)
+            u_euler = riemannian_exp_map(u_curr, v_curr * band_curr, step_size=h)
             u_euler = torch.clamp(u_euler, min=0.0)
             u_euler = u_euler / torch.norm(u_euler, p=2, dim=-1, keepdim=True)
 
             # 2. Corrector step (Heun average velocity)
+            tau_next = wavefront_phase(t_next, seq_len, alpha=alpha).unsqueeze(-1)
+            band_next = ((tau_next > 0.0) & (tau_next < 1.0)).float() / max(1e-5, 1.0 - alpha)
+
             v_next = model(u_euler, t_next)
             v_next = project_tangent_sphere(u_euler, v_next)
-            v_avg = 0.5 * (v_curr + v_next)
+            v_avg = 0.5 * (v_curr * band_curr + v_next * band_next)
 
             u_next = riemannian_exp_map(u_curr, v_avg, step_size=h)
             u_next = torch.clamp(u_next, min=0.0)
             u_next = u_next / torch.norm(u_next, p=2, dim=-1, keepdim=True)
 
             # 3. Adaptive confidence locking based on updated state at t_next
-            tau_next = wavefront_phase(t_next, seq_len, alpha=alpha).unsqueeze(-1)
             p_next = inverse_bhattacharyya_sphere_map(u_next)
             max_p, argmax_p = torch.max(p_next, dim=-1)
 

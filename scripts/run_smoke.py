@@ -88,11 +88,15 @@ def main():
         t = torch.rand(args.batch_size, 1, device=device)
         tau = wavefront_phase(t, seq_len=args.seq_len, alpha=0.50).unsqueeze(-1)  # (B, L, 1)
 
-        u0_batch = u0_uniform.view(1, 1, -1).expand(args.batch_size, args.seq_len, -1)
+        # Stochastic Dirichlet source distribution on S^{V-1}_+
+        p0 = torch.distributions.Dirichlet(torch.ones(args.vocab_size, device=device)).sample((args.batch_size, args.seq_len))
+        u0_batch = torch.sqrt(p0)
 
         # Exact geodesic position and target velocity
         u_tau = geodesic_sphere_path(u0_batch, u1_batch, tau)
         v_target = geodesic_sphere_velocity(u0_batch, u1_batch, tau)
+        active_band = ((tau > 0.0) & (tau < 1.0)).float()
+        v_target = v_target * active_band
 
         # Forward pass: predict velocity
         v_pred = model(u_tau, t)
