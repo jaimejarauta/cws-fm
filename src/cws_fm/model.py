@@ -134,3 +134,4 @@ class SimplexVelocityField(nn.Module):
         # Strict Riemannian orthogonal projection onto T_{u_t} S^{V-1}_+
         tangent_v = project_tangent_sphere(u_t, raw_v)
         return tangent_v
+

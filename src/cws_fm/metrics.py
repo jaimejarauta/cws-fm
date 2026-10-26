@@ -36,3 +36,4 @@ def compute_token_accuracy(pred_tokens: torch.Tensor, target_tokens: torch.Tenso
     """Computes exact token match accuracy between generated and ground-truth sequences."""
     matches = (pred_tokens == target_tokens).float()
     return float(matches.mean().item())
+

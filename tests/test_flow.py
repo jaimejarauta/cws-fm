@@ -70,3 +70,4 @@ def test_riemannian_exp_map():
 
     # Preserves unit norm
     assert torch.allclose(torch.norm(u_next, p=2, dim=-1), torch.ones(B, L), atol=1e-5)
+

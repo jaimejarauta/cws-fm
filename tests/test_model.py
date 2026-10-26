@@ -33,3 +33,4 @@ def test_sample_cws_fm_shape_and_range():
     assert probs.shape == (1, L, V)
     assert (tokens >= 0).all() and (tokens < V).all()
     assert torch.allclose(probs.sum(dim=-1), torch.ones(1, L), atol=1e-5)
+

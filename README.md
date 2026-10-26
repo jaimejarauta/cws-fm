@@ -21,3 +21,4 @@ A causal wavefront schedule $\tau(t, i) = \operatorname{clamp}\left(\frac{t - \a
 python scripts/run_smoke.py --steps 100 --seq-len 16 --vocab-size 32
 pytest tests/
 ```
+

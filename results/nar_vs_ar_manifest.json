@@ -1,0 +1,29 @@
+{
+  "benchmark": "cws_fm_vs_autoregressive_llm",
+  "date": "2026-10-26T07:44:17.366805+00:00",
+  "hardware": "mps",
+  "seq_len": 32,
+  "vocab_size": 64,
+  "ar_baseline": {
+    "decoding_steps": 31,
+    "avg_latency_ms": 20.01707213348709,
+    "tokens_per_sec": 1548.6780380902599
+  },
+  "cws_fm_k8": {
+    "ode_steps": 8,
+    "avg_latency_ms": 26.790913863806054,
+    "tokens_per_sec": 1194.4348058701837,
+    "speedup_vs_ar": 0.7471589896203474,
+    "rounding_collapse_rate": 0.0,
+    "entropy": 1.740754207446571e-09
+  },
+  "cws_fm_k4": {
+    "ode_steps": 4,
+    "avg_latency_ms": 16.453927869830903,
+    "tokens_per_sec": 1944.8243758667252,
+    "speedup_vs_ar": 1.2165528068340077
+  },
+  "gate1_passed": false,
+  "gate2_passed": true,
+  "gate_status": "FAIL"
+}
