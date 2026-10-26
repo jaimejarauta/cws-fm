@@ -49,3 +49,25 @@ def compute_palindrome_validity(tokens: torch.Tensor) -> float:
 def compute_distinct_ratio(tokens: torch.Tensor) -> float:
     """Unique sequences / total sequences; 1/B means a deterministic sampler."""
     return torch.unique(tokens, dim=0).size(0) / tokens.size(0)
+
+
+def ngram_entropy(tokens: torch.Tensor, n: int) -> float:
+    """Shannon entropy (bits) of the empirical n-gram distribution pooled over all sequences."""
+    from collections import Counter
+    import math
+    counts = Counter(tuple(row[i:i + n].tolist()) for row in tokens for i in range(row.numel() - n + 1))
+    total = sum(counts.values())
+    return -sum(c / total * math.log2(c / total) for c in counts.values())
+
+
+def distinct_ngrams(tokens: torch.Tensor, n: int) -> float:
+    """Distinct n-grams / total n-grams; low values flag repetitive (collapsed) samples."""
+    grams = [tuple(row[i:i + n].tolist()) for row in tokens for i in range(row.numel() - n + 1)]
+    return len(set(grams)) / max(1, len(grams))
+
+
+def word_validity(tokens: torch.Tensor, vocab_words: set) -> float:
+    """Fraction of complete space-separated words that occur in the training vocabulary."""
+    from cws_fm.text8 import decode
+    words = [w for row in tokens for w in decode(row).split(" ")[1:-1] or decode(row).split(" ") if w]
+    return sum(w in vocab_words for w in words) / max(1, len(words))
