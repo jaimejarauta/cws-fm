@@ -86,6 +86,7 @@ def posterior_ce(model, data, a, taus=(0.25, 0.5, 0.75)):
 
 
 def evaluate(arm, model, a, data, judge):
+    print(f"[{arm}] Starting held-out text8 evaluation...", flush=True)
     train_words = set(w for w, _ in Counter(decode(data["train"][:20_000_000]).split()).most_common(200_000))
     real = sample_batch(data["test"], a.eval_samples, a.seq_len, torch.Generator().manual_seed(2))
     ref = {"unigram_H": ngram_entropy(real, 1), "bigram_H": ngram_entropy(real, 2),
@@ -96,21 +97,27 @@ def evaluate(arm, model, a, data, judge):
     nfes = [a.seq_len] if arm == "ar" else a.nfe
     model.eval()
     for nfe in nfes:
+        print(f"[{arm}] Sampling {a.eval_samples} sequences at NFE={nfe}...", flush=True)
         t0 = time.time()
         toks, collapse = sample(arm, model, a, a.eval_samples, nfe)
-        r = {"sec_per_sample": (time.time() - t0) / a.eval_samples, "collapse_rate": collapse,
-             "latency_ms_b1": latency_ms(lambda: sample(arm, model, a, 1, nfe), a.device),
+        sample_dur = time.time() - t0
+        print(f"[{arm}] Measuring synchronized latency (b=1, 20 reps) at NFE={nfe}...", flush=True)
+        lat = latency_ms(lambda: sample(arm, model, a, 1, nfe), a.device)
+        r = {"sec_per_sample": sample_dur / a.eval_samples, "collapse_rate": collapse,
+             "latency_ms_b1": lat,
              "unigram_H": ngram_entropy(toks, 1), "bigram_H": ngram_entropy(toks, 2),
              "distinct4": distinct_ngrams(toks, 4), "word_valid": word_validity(toks, train_words),
              "example": decode(toks[0][:120])}
         if judge is not None:
             r["judge_bpc"] = judge_bits_per_char(judge, toks)
         results[f"nfe{nfe}"] = r
-        print(f"[eval] nfe={nfe} " + " ".join(f"{k}={v:.3f}" for k, v in r.items() if isinstance(v, float)))
-        print(f"       sample: {r['example']!r}")
+        print(f"[eval] nfe={nfe} " + " ".join(f"{k}={v:.3f}" for k, v in r.items() if isinstance(v, float)), flush=True)
+        print(f"       sample: {r['example']!r}", flush=True)
     if arm == "fm":
+        print(f"[{arm}] Computing posterior cross-entropy...", flush=True)
         results["posterior_ce"] = posterior_ce(model, data["test"], a)
     if arm == "ar":
+        print(f"[{arm}] Computing test set BPC under AR model...", flush=True)
         results["test_bpc"] = judge_bits_per_char(model, sample_batch(data["test"], 2048, a.seq_len,
                                                                        torch.Generator().manual_seed(3)))
     return results
@@ -163,7 +170,7 @@ def main():
     p.add_argument("--lr", type=float, default=3e-4)
     p.add_argument("--warmup", type=int, default=2000)
     p.add_argument("--nfe", type=int, nargs="+", default=[4, 8, 16, 32, 64])
-    p.add_argument("--eval-samples", type=int, default=1000)
+    p.add_argument("--eval-samples", type=int, default=250)
     p.add_argument("--sample-batch", type=int, default=250)
     p.add_argument("--judge", default=None, help="directory of the finished AR run")
     p.add_argument("--data-dir", default="data")
@@ -175,6 +182,11 @@ def main():
     a = p.parse_args()
     if a.compare:
         return compare(a.compare)
+
+    manifest_path = os.path.join(a.out_dir, "manifest.json")
+    if os.path.exists(manifest_path) and not a.eval_only:
+        print(f"[{a.arm}] manifest already exists at {manifest_path}; skipping run.")
+        return
 
     torch.manual_seed(a.seed)
     data = load_text8(a.data_dir)
