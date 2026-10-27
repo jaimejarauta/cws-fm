@@ -54,9 +54,17 @@ def main():
     parser.add_argument("--eval-samples", type=int, default=64, help="Sequences sampled per eval")
     parser.add_argument("--seed", type=int, default=0, help="Random seed")
     parser.add_argument("--alpha", type=float, default=0.50, help="Wavefront tilt; 0 = all positions in sync")
+    parser.add_argument("--device", type=str, default=None, help="Device (cuda, mps, cpu)")
     args = parser.parse_args()
 
-    device = torch.device("mps" if torch.backends.mps.is_available() else "cpu")
+    if args.device:
+        device = torch.device(args.device)
+    elif torch.cuda.is_available():
+        device = torch.device("cuda")
+    elif torch.backends.mps.is_available():
+        device = torch.device("mps")
+    else:
+        device = torch.device("cpu")
     torch.manual_seed(args.seed)
     print("=" * 70)
     print("CWS-FM: CAUSAL WAVEFRONT SIMPLEX FLOW MATCHING SMOKE BENCHMARK")

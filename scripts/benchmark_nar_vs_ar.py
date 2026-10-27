@@ -87,9 +87,17 @@ def main():
     parser.add_argument("--d-model", type=int, default=64, help="Hidden dimension")
     parser.add_argument("--batch-size", type=int, default=16, help="Batch size")
     parser.add_argument("--eval-iters", type=int, default=25, help="Timing benchmark iterations")
+    parser.add_argument("--device", type=str, default=None, help="Device (cuda, mps, cpu)")
     args = parser.parse_args()
 
-    device = torch.device("mps" if torch.backends.mps.is_available() else "cpu")
+    if args.device:
+        device = torch.device(args.device)
+    elif torch.cuda.is_available():
+        device = torch.device("cuda")
+    elif torch.backends.mps.is_available():
+        device = torch.device("mps")
+    else:
+        device = torch.device("cpu")
     print("=" * 80)
     print("STAGE 2 EMPIRICAL BENCHMARK: CWS-FM (NAR) vs AUTOREGRESSIVE LLM (AR)")
     print(f"Device: {device} | Sequence Length: {args.seq_len} | Vocab Size: {args.vocab_size}")
