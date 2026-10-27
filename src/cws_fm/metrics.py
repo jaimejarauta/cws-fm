@@ -71,3 +71,18 @@ def word_validity(tokens: torch.Tensor, vocab_words: set) -> float:
     from cws_fm.text8 import decode
     words = [w for row in tokens for w in decode(row).split(" ")[1:-1] or decode(row).split(" ") if w]
     return sum(w in vocab_words for w in words) / max(1, len(words))
+
+
+def text8_gate(ar: dict, mdlm: dict, fms: dict) -> dict:
+    """Gate (2026-10-27): PASS iff some FM run at some NFE n has, all at once, judge bpc <= 1.10x the AR samples',
+    judge bpc <= MDLM's at the same n, unigram entropy within 2% of real text, and batch-1 latency <= 0.5x AR's."""
+    ar_key = next(k for k in ar if k.startswith("nfe"))
+    q_ar, lat_ar, h_real = ar[ar_key]["judge_bpc"], ar[ar_key]["latency_ms_b1"], ar["real_text"]["unigram_H"]
+    hits = []
+    for name, r in fms.items():
+        for n in (k for k in r if k.startswith("nfe") and k in mdlm):
+            q, h, lat = r[n]["judge_bpc"], r[n]["unigram_H"], r[n]["latency_ms_b1"]
+            if (q <= 1.10 * q_ar and q <= mdlm[n]["judge_bpc"] and abs(h - h_real) <= 0.02 * h_real
+                    and lat <= 0.5 * lat_ar):
+                hits.append(f"{name}@{n}")
+    return {"passed": bool(hits), "passing_points": hits, "ar_judge_bpc": q_ar, "ar_latency_ms_b1": lat_ar}

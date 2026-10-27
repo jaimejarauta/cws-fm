@@ -73,6 +73,30 @@ def ar_sample(model: TokenTransformer, batch: int, seq_len: int, temperature: fl
 
 
 @torch.no_grad()
+def ar_sample_cached(model: TokenTransformer, batch: int, seq_len: int, temperature: float = 1.0) -> torch.Tensor:
+    """Same distribution as ar_sample with a per-layer KV cache: one token per forward, the fair AR latency arm."""
+    device = next(model.parameters()).device
+    vocab = model.head.out_features
+    x = torch.randint(0, vocab, (batch, 1), device=device)
+    cache = [None] * len(model.blocks.layers)
+    for t in range(seq_len - 1):
+        h = model.embed(x[:, -1:]) + model.pos.weight[t]
+        for i, layer in enumerate(model.blocks.layers):  # norm_first encoder layer, unrolled
+            attn = layer.self_attn
+            q, k, v = F.linear(layer.norm1(h), attn.in_proj_weight, attn.in_proj_bias).chunk(3, -1)
+            if cache[i] is not None:  # ponytail: cat per step is O(L^2) copies; preallocate if L >> 256
+                k, v = torch.cat([cache[i][0], k], 1), torch.cat([cache[i][1], v], 1)
+            cache[i] = (k, v)
+            split = lambda z: z.view(batch, -1, attn.num_heads, attn.head_dim).transpose(1, 2)
+            o = F.scaled_dot_product_attention(split(q), split(k), split(v))  # one query sees only the past
+            h = h + attn.out_proj(o.transpose(1, 2).reshape(batch, 1, -1))
+            h = h + layer.linear2(layer.activation(layer.linear1(layer.norm2(h))))
+        logits = model.head(model.norm(h[:, -1])).float() / temperature
+        x = torch.cat([x, torch.multinomial(F.softmax(logits, -1), 1)], 1)
+    return x
+
+
+@torch.no_grad()
 def judge_bits_per_char(judge: TokenTransformer, x: torch.Tensor, batch: int = 256) -> float:
     """Mean NLL in bits/char of x[:, 1:] under an AR judge (first char excluded)."""
     total, count = 0.0, 0

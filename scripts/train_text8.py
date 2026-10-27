@@ -9,15 +9,16 @@ import argparse
 import json
 import math
 import os
+import statistics
 import time
 from collections import Counter
 
 import torch
 import torch.nn.functional as F
 
-from cws_fm.baselines import TokenTransformer, ar_loss, ar_sample, judge_bits_per_char, mdlm_loss, mdlm_sample
+from cws_fm.baselines import TokenTransformer, ar_loss, ar_sample_cached, judge_bits_per_char, mdlm_loss, mdlm_sample
 from cws_fm.flow import flow_matching_loss, geodesic_sphere_path, sample_cws_fm
-from cws_fm.metrics import compute_rounding_collapse_rate, distinct_ngrams, ngram_entropy, word_validity
+from cws_fm.metrics import compute_rounding_collapse_rate, distinct_ngrams, ngram_entropy, text8_gate, word_validity
 from cws_fm.model import SimplexVelocityField
 from cws_fm.runtime import Run
 from cws_fm.text8 import decode, load_text8, sample_batch
@@ -50,8 +51,23 @@ def sample(arm, model, a, n, nfe):
         elif arm == "mdlm":
             out.append((mdlm_sample(model, b, a.seq_len, nfe, MASK_ID).cpu(), 0.0))
         else:
-            out.append((ar_sample(model, b, a.seq_len).cpu(), 0.0))
+            out.append((ar_sample_cached(model, b, a.seq_len).cpu(), 0.0))
     return torch.cat([t for t, _ in out]), sum(c for _, c in out) / len(out)
+
+
+def latency_ms(fn, device: str, reps: int = 20) -> float:
+    """Median ms of fn() after 3 warmup calls, with CUDA synchronized on both sides of each call."""
+    sync = torch.cuda.synchronize if device == "cuda" else (lambda: None)
+    for _ in range(3):
+        fn()
+    times = []
+    for _ in range(reps):
+        sync()
+        t0 = time.perf_counter()
+        fn()
+        sync()
+        times.append((time.perf_counter() - t0) * 1000.0)
+    return statistics.median(times)
 
 
 @torch.no_grad()
@@ -83,6 +99,7 @@ def evaluate(arm, model, a, data, judge):
         t0 = time.time()
         toks, collapse = sample(arm, model, a, a.eval_samples, nfe)
         r = {"sec_per_sample": (time.time() - t0) / a.eval_samples, "collapse_rate": collapse,
+             "latency_ms_b1": latency_ms(lambda: sample(arm, model, a, 1, nfe), a.device),
              "unigram_H": ngram_entropy(toks, 1), "bigram_H": ngram_entropy(toks, 2),
              "distinct4": distinct_ngrams(toks, 4), "word_valid": word_validity(toks, train_words),
              "example": decode(toks[0][:120])}
@@ -107,40 +124,34 @@ def load_judge(path, device):
     return judge.to(device).eval()
 
 
-def compare(dirs, gate_nfe: int = 32):
-    """Gate (2026-10-26): best FM within 10% of MDLM judge bpc at NFE 32 with unigram H within 2% of data;
-    wavefront kept only if alpha=0.5 beats alpha=0 at >= 2 of the NFEs; KILL if FM > 1.25x MDLM at every NFE."""
+def compare(dirs):
+    """Applies metrics.text8_gate (2026-10-27) to finished ar, mdlm and fm runs; the AR run anchors quality and latency.
+    wavefront kept only if alpha=0.5 beats alpha=0 in judge bpc at >= 2 of the NFEs."""
     runs = {}
     for d in dirs:
         m = json.load(open(os.path.join(d, "manifest.json")))
         c = m["config"]
         runs[f"{c['arm']}" + (f"-a{c['alpha']}" if c["arm"] == "fm" else "")] = m["results"]
-    mdlm = runs.get("mdlm")
     fms = {k: v for k, v in runs.items() if k.startswith("fm")}
-    if not mdlm or not fms:
-        raise SystemExit("need an mdlm run and at least one fm run")
-    ref_h = mdlm["real_text"]["unigram_H"]
-    nfes = [k for k in mdlm if k.startswith("nfe")]
-    for name, r in fms.items():
-        ratios = {n: r[n]["judge_bpc"] / mdlm[n]["judge_bpc"] for n in nfes if n in r}
-        print(name, {n: round(v, 3) for n, v in ratios.items()})
-    g = f"nfe{gate_nfe}"
-    best = min(fms.values(), key=lambda r: r[g]["judge_bpc"])
-    pass_ = (best[g]["judge_bpc"] <= 1.10 * mdlm[g]["judge_bpc"]
-             and abs(best[g]["unigram_H"] - ref_h) <= 0.02 * ref_h)
-    kill = all(r[n]["judge_bpc"] > 1.25 * mdlm[n]["judge_bpc"] for r in fms.values() for n in nfes if n in r)
+    if "ar" not in runs or "mdlm" not in runs or not fms:
+        raise SystemExit("need an ar run, an mdlm run and at least one fm run")
+    nfes = [k for k in runs["mdlm"] if k.startswith("nfe")]
+    for name in ["ar", "mdlm", *fms]:
+        for n, r in runs[name].items():
+            if n.startswith("nfe"):
+                print(f"{name:<8} {n:<7} bpc {r['judge_bpc']:.3f}  H1 {r['unigram_H']:.3f}  b1 {r['latency_ms_b1']:.1f} ms")
+    gate = text8_gate(runs["ar"], runs["mdlm"], fms)
     keep_wavefront = None
     if "fm-a0.0" in fms and "fm-a0.5" in fms:
-        wins = sum(fms["fm-a0.5"][n]["judge_bpc"] < fms["fm-a0.0"][n]["judge_bpc"] for n in nfes)
-        keep_wavefront = wins >= 2
-    print(f"PASS={pass_} KILL={kill} keep_wavefront={keep_wavefront}")
+        keep_wavefront = sum(fms["fm-a0.5"][n]["judge_bpc"] < fms["fm-a0.0"][n]["judge_bpc"] for n in nfes) >= 2
+    print(f"gate: {gate} keep_wavefront={keep_wavefront}")
+    print("DECISION:", "CONTINUE" if gate["passed"] else "KILL")
 
 
 def main():
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument("--arm", choices=["ar", "fm", "mdlm"])
     p.add_argument("--compare", nargs="+", help="finished arm directories")
-    p.add_argument("--gate-nfe", type=int, default=32)
     p.add_argument("--alpha", type=float, default=0.0)
     p.add_argument("--heun", action="store_true")
     p.add_argument("--steps", type=int, default=150_000)
@@ -163,7 +174,7 @@ def main():
     p.add_argument("--eval-only", action="store_true")
     a = p.parse_args()
     if a.compare:
-        return compare(a.compare, a.gate_nfe)
+        return compare(a.compare)
 
     torch.manual_seed(a.seed)
     data = load_text8(a.data_dir)

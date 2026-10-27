@@ -48,3 +48,14 @@ def test_sample_metrics():
     assert distinct_ngrams(x, 2) == 3 / 7  # 'ab','b ',' a' distinct among 7 bigrams
     assert word_validity(x, {"ab"}) == 1.0
     assert word_validity(torch.tensor([encode("ab zz")]), {"ab"}) == 0.5
+
+
+def test_cached_ar_matches_uncached():
+    from cws_fm.baselines import ar_sample_cached
+    torch.manual_seed(0)
+    m = TokenTransformer(vocab=27, d_model=32, layers=2, heads=4, max_len=16, causal=True).eval()
+    torch.manual_seed(1)
+    a = ar_sample(m, batch=3, seq_len=16, temperature=1e-4)  # near-greedy: draws are deterministic
+    torch.manual_seed(1)
+    b = ar_sample_cached(m, batch=3, seq_len=16, temperature=1e-4)
+    assert torch.equal(a, b)
